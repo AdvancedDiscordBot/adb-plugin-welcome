@@ -1,55 +1,58 @@
 {
 	"name": "adb-plugin-welcome",
 	"displayName": "Welcome",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"description": "Customizable welcome & goodbye messages with canvas image cards, DMs, and embeds.",
 	"author": "DeadIndian",
 	"main": "index.js",
 	"requiresRestart": false,
-	"permissions": [
-		"db.read",
-		"db.write",
-		"commands.register",
-		"events.register"
-	],
-	"discordPermissions": [
-		"SendMessages",
-		"EmbedLinks",
-		"AttachFiles"
-	],
+	"manifestVersion": 2,
+	"process": {
+		"model": "pooled",
+		"maxExecutionMs": 5000,
+		"memoryMb": 128,
+		"persistentReason": null
+	},
+	"capabilities": {
+		"storage": ["own-collection"],
+		"discord": ["SendMessages", "EmbedLinks", "AttachFiles", "GuildInfo"],
+		"hooks": ["subscribe"]
+	},
+	"permissions": {
+		"storage": ["own-collection"],
+		"discord": ["SendMessages", "EmbedLinks", "AttachFiles", "GuildInfo"],
+		"hooks": ["subscribe"],
+		"network": { "outbound": [] },
+		"filesystem": { "read": [], "write": [] },
+		"childProcess": false,
+		"nativeAddons": false
+	},
+	"declaredDependencies": [],
+	"discordPermissions": ["SendMessages", "EmbedLinks", "AttachFiles"],
+	"engines": {
+		"core": ">=2.0.0",
+		"plugins": { "administration": ">=2.0.0" }
+	},
+	"settings": {
+		"commandPermissions": true,
+		"schema": [
+			{ "key": "welcomeChannelId", "type": "channel", "label": "Welcome channel" },
+			{ "key": "welcomeMessage", "type": "string", "label": "Welcome message", "default": "Welcome to the server, {user}! You are member #{memberCount}." },
+			{ "key": "goodbyeChannelId", "type": "channel", "label": "Goodbye channel" },
+			{ "key": "goodbyeMessage", "type": "string", "label": "Goodbye message", "default": "Goodbye {username}! We will miss you." },
+			{ "key": "dmEnabled", "type": "boolean", "label": "Send welcome DM", "default": false },
+			{ "key": "cardEnabled", "type": "boolean", "label": "Show welcome image card", "default": false }
+		]
+	},
 	"configSchema": {
 		"type": "object",
 		"properties": {
-			"welcomeChannelId": {
-				"type": "string",
-				"default": "",
-				"description": "The channel where welcome messages are sent"
-			},
-			"welcomeMessage": {
-				"type": "string",
-				"default": "Welcome to the server, {user}! You are member #{memberCount}.",
-				"description": "The message sent when a new member joins"
-			},
-			"goodbyeChannelId": {
-				"type": "string",
-				"default": "",
-				"description": "The channel where goodbye messages are sent"
-			},
-			"goodbyeMessage": {
-				"type": "string",
-				"default": "Goodbye {username}! We will miss you.",
-				"description": "The message sent when a member leaves"
-			},
-			"dmEnabled": {
-				"type": "boolean",
-				"default": false,
-				"description": "Whether to send the welcome message to the user in Direct Messages (DM)"
-			},
-			"cardEnabled": {
-				"type": "boolean",
-				"default": false,
-				"description": "Whether to generate and attach a canvas image card"
-			}
+			"welcomeChannelId": { "type": "string", "default": "" },
+			"welcomeMessage": { "type": "string", "default": "Welcome to the server, {user}! You are member #{memberCount}." },
+			"goodbyeChannelId": { "type": "string", "default": "" },
+			"goodbyeMessage": { "type": "string", "default": "Goodbye {username}! We will miss you." },
+			"dmEnabled": { "type": "boolean", "default": false },
+			"cardEnabled": { "type": "boolean", "default": false }
 		}
 	}
 }
