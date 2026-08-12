@@ -1,8 +1,8 @@
 {
 	"name": "adb-plugin-welcome",
 	"displayName": "Welcome",
-	"version": "1.1.0",
-	"description": "Customizable welcome & goodbye messages with canvas image cards, DMs, and embeds.",
+	"version": "2.0.0",
+	"description": "Customizable welcome & goodbye messages with canvas image cards, role-based routing, multi-channel onboarding, social links, buttons, and stats.",
 	"author": "DeadIndian",
 	"main": "index.js",
 	"requiresRestart": false,
@@ -15,12 +15,12 @@
 	},
 	"capabilities": {
 		"storage": ["own-collection"],
-		"discord": ["SendMessages", "EmbedLinks", "AttachFiles", "GuildInfo"],
+		"discord": ["SendMessages", "EmbedLinks", "AttachFiles", "GuildInfo", "ManageRoles"],
 		"hooks": ["subscribe"]
 	},
 	"permissions": {
 		"storage": ["own-collection"],
-		"discord": ["SendMessages", "EmbedLinks", "AttachFiles", "GuildInfo"],
+		"discord": ["SendMessages", "EmbedLinks", "AttachFiles", "GuildInfo", "ManageRoles"],
 		"hooks": ["subscribe"],
 		"network": { "outbound": [] },
 		"filesystem": { "read": [], "write": [] },
@@ -28,7 +28,7 @@
 		"nativeAddons": false
 	},
 	"declaredDependencies": [],
-	"discordPermissions": ["SendMessages", "EmbedLinks", "AttachFiles"],
+	"discordPermissions": ["SendMessages", "EmbedLinks", "AttachFiles", "ManageRoles"],
 	"engines": {
 		"core": ">=2.0.0",
 		"plugins": { "administration": ">=2.0.0" }
@@ -36,8 +36,8 @@
 	"settings": {
 		"commandPermissions": true,
 		"schema": [
-			{ "key": "welcomeChannelId", "type": "channel", "label": "Welcome channel" },
-			{ "key": "welcomeMessage", "type": "string", "label": "Welcome message", "default": "Welcome to the server, {user}! You are member #{memberCount}." },
+			{ "key": "welcomeChannelId", "type": "channel", "label": "Default welcome channel" },
+			{ "key": "welcomeMessage", "type": "string", "label": "Default welcome message", "default": "Welcome to the server, {user}! You are member #{memberCount}." },
 			{ "key": "goodbyeChannelId", "type": "channel", "label": "Goodbye channel" },
 			{ "key": "goodbyeMessage", "type": "string", "label": "Goodbye message", "default": "Goodbye {username}! We will miss you." },
 			{ "key": "dmEnabled", "type": "boolean", "label": "Send welcome DM", "default": false },
@@ -52,7 +52,85 @@
 			"goodbyeChannelId": { "type": "string", "default": "" },
 			"goodbyeMessage": { "type": "string", "default": "Goodbye {username}! We will miss you." },
 			"dmEnabled": { "type": "boolean", "default": false },
-			"cardEnabled": { "type": "boolean", "default": false }
+			"cardEnabled": { "type": "boolean", "default": false },
+			"channels": {
+				"type": "object",
+				"properties": {
+					"welcome": { "type": "array", "items": { "type": "string" }, "default": [] },
+					"goodbye": { "type": "string", "default": "" },
+					"rules": { "type": "string", "default": "" },
+					"verify": { "type": "string", "default": "" }
+				}
+			},
+			"roleMessages": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"roleId": { "type": "string" },
+						"text": { "type": "string" },
+						"channelId": { "type": "string" }
+					}
+				},
+				"default": []
+			},
+			"backgrounds": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"id": { "type": "string" },
+						"url": { "type": "string" },
+						"uploadedBy": { "type": "string" }
+					}
+				},
+				"default": []
+			},
+			"defaultBackground": { "type": "string", "default": null },
+			"roleBackgrounds": { "type": "object", "default": {} },
+			"social": {
+				"type": "object",
+				"properties": {
+					"discord": { "type": "string", "default": "" },
+					"youtube": { "type": "string", "default": "" },
+					"twitter": { "type": "string", "default": "" },
+					"website": { "type": "string", "default": "" },
+					"github": { "type": "string", "default": "" },
+					"twitch": { "type": "string", "default": "" }
+				}
+			},
+			"buttons": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"label": { "type": "string" },
+						"url": { "type": "string" },
+						"type": { "type": "string", "enum": ["link", "role"] },
+						"roleId": { "type": "string" }
+					}
+				},
+				"default": []
+			},
+			"embed": {
+				"type": "object",
+				"properties": {
+					"color": { "type": "string", "default": "#5865F2" },
+					"title": { "type": "string", "default": "Welcome, {user}!" },
+					"description": { "type": "string", "default": "" },
+					"footer": { "type": "string", "default": "" },
+					"thumbnail": { "type": "string", "default": "user" }
+				}
+			},
+			"stats": {
+				"type": "object",
+				"properties": {
+					"welcomeCount": { "type": "number", "default": 0 },
+					"goodbyeCount": { "type": "number", "default": 0 },
+					"since": { "type": "string", "default": null },
+					"lastMilestone": { "type": "number", "default": 0 }
+				}
+			}
 		}
 	}
 }

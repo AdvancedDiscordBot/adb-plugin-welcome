@@ -33,7 +33,9 @@ function fakeInteraction(options = {}) {
 				name: "Test Guild",
 				memberCount: 42,
 				iconURL: () => "https://cdn.discordapp.com/embed/avatars/0.png",
+				roles: { cache: options._guildRoles ?? new Map() },
 			},
+			roles: { cache: options._memberRoles ?? new Map() },
 			permissions: {
 				has: () => true, // Always has permissions for testing
 			},
@@ -52,13 +54,19 @@ function fakeInteraction(options = {}) {
 					},
 				}),
 			},
+			roles: {
+				fetch: async (id) => (options._guildRoles?.has(id) ? options._guildRoles.get(id) : null),
+			},
 		},
 		options: {
 			getString: (name) => options[name] ?? null,
 			getInteger: (name) => options[name] ?? null,
 			getUser: (name) => options[name] ?? null,
 			getChannel: (name) => options[name] ?? null,
+			getRole: (name) => options[name] ?? null,
+			getAttachment: (name) => options[name] ?? null,
 			getSubcommand: () => options._subcommand ?? null,
+			getSubcommandGroup: () => options._group ?? null,
 		},
 		reply: async (payload) => {
 			replies.push({ type: "reply", payload });
@@ -212,6 +220,171 @@ async function main() {
 		mockMember._sentPayloads.some((p) => p.type === "channel" && p.channelId === "123456789"),
 		"expected goodbye message to be sent to channel",
 	);
+
+	// 11. /welcome embed-color / -title / etc
+	const mockRole = { id: "role-1", name: "New Member", position: 5 };
+	const guildRoles = new Map([["role-1", mockRole]]);
+
+	const intColor = fakeInteraction({ _subcommand: "embed-color", hex: "#ABCDEF" });
+	await welcomeCommand.execute(intColor);
+	assert.ok(intColor.replies.some((r) => getContent(r.payload).includes("#ABCDEF")), "expected embed color to be accepted");
+
+	const intBadColor = fakeInteraction({ _subcommand: "embed-color", hex: "not-a-color" });
+	await welcomeCommand.execute(intBadColor);
+	assert.ok(intBadColor.replies.some((r) => getContent(r.payload).includes("Invalid hex")), "expected invalid hex to be rejected");
+
+	const intTitle = fakeInteraction({ _subcommand: "embed-title", text: "Hey {user}!" });
+	await welcomeCommand.execute(intTitle);
+	assert.ok(intTitle.replies.some((r) => getContent(r.payload).includes("title updated")), "expected embed title update");
+
+	// 12. /welcome social <platform>
+	const intSocial = fakeInteraction({ _subcommand: "github", _group: "social", url: "https://github.com/example" });
+	await welcomeCommand.execute(intSocial);
+	assert.ok(intSocial.replies.some((r) => getContent(r.payload).includes("GitHub")), "expected social link confirmation");
+
+	// 13. /welcome button add / list / remove
+	const intButtonLink = fakeInteraction({ _subcommand: "add", _group: "button", label: "Rules", url: "https://example.com/rules" });
+	await welcomeCommand.execute(intButtonLink);
+	assert.ok(intButtonLink.replies.some((r) => getContent(r.payload).includes("added")), "expected link button to be added");
+
+	const intButtonRole = fakeInteraction({ _subcommand: "add", _group: "button", label: "Get Member Role", role: mockRole });
+	await welcomeCommand.execute(intButtonRole);
+	assert.ok(intButtonRole.replies.some((r) => getContent(r.payload).includes("added")), "expected role button to be added");
+
+	const intButtonList = fakeInteraction({ _subcommand: "list", _group: "button" });
+	await welcomeCommand.execute(intButtonList);
+	assert.ok(intButtonList.replies.some((r) => getContent(r.payload).includes("Rules") && getContent(r.payload).includes("Get Member Role")), "expected both buttons to be listed");
+
+	const intButtonRemove = fakeInteraction({ _subcommand: "remove", _group: "button", label: "Rules" });
+	await welcomeCommand.execute(intButtonRemove);
+	assert.ok(intButtonRemove.replies.some((r) => getContent(r.payload).includes("removed")), "expected button to be removed");
+
+	// 14. /welcome background presets / upload / set
+	const intPresets = fakeInteraction({ _subcommand: "presets", _group: "background" });
+	await welcomeCommand.execute(intPresets);
+	assert.ok(intPresets.replies.some((r) => getContent(r.payload).includes("gradient-1")), "expected preset list to include built-in presets");
+
+	const intUpload = fakeInteraction({
+		_subcommand: "upload",
+		_group: "background",
+		image: { url: "https://cdn.discordapp.com/attachments/1/2/bg.png", contentType: "image/png" },
+	});
+	await welcomeCommand.execute(intUpload);
+	assert.ok(intUpload.replies.some((r) => getContent(r.payload).includes("Background uploaded")), "expected background upload confirmation");
+
+	const intBgList = fakeInteraction({ _subcommand: "list", _group: "background" });
+	await welcomeCommand.execute(intBgList);
+	assert.ok(intBgList.replies.some((r) => getContent(r.payload).includes("1/10")), "expected uploaded background to be listed");
+
+	const intBgSet = fakeInteraction({ _subcommand: "set", _group: "background", id: "gradient-3" });
+	await welcomeCommand.execute(intBgSet);
+	assert.ok(intBgSet.replies.some((r) => getContent(r.payload).includes("gradient-3")), "expected default background to be set");
+
+	// 15. /welcome role
+	const intRoleSet = fakeInteraction({
+		_subcommand: "role",
+		role: mockRole,
+		channel: { id: "role-channel-1", isTextBased: () => true, toString: () => "<#role-channel-1>" },
+	});
+	await welcomeCommand.execute(intRoleSet);
+	assert.ok(intRoleSet.replies.some((r) => getContent(r.payload).includes("set to")), "expected role override to be saved");
+
+	const intRoleMsg = fakeInteraction({
+		_subcommand: "role-message",
+		role: mockRole,
+		text: "Welcome VIP {user}!",
+	});
+	await welcomeCommand.execute(intRoleMsg);
+	assert.ok(intRoleMsg.replies.some((r) => getContent(r.payload).includes("set")), "expected role message override to be saved");
+
+	// A member with that role should be routed to the role-specific channel with the role-specific text.
+	const roleMember = {
+		id: "member-789",
+		user: { id: "member-789", tag: "VipUser#0001", username: "VipUser", displayAvatarURL: () => "https://cdn.discordapp.com/embed/avatars/0.png" },
+		guild: {
+			id: "test-guild-id",
+			name: "Test Guild",
+			memberCount: 44,
+			iconURL: () => "https://cdn.discordapp.com/embed/avatars/0.png",
+			roles: { cache: guildRoles },
+			channels: {
+				fetch: async (id) => ({
+					id,
+					isTextBased: () => true,
+					send: async (payload) => {
+						roleMember._sentPayloads.push({ type: "channel", channelId: id, payload });
+						return payload;
+					},
+				}),
+			},
+		},
+		roles: { cache: new Map([["role-1", mockRole]]) },
+		send: async () => {},
+		_sentPayloads: [],
+	};
+	await emitEvent("guildMemberAdd", roleMember);
+	assert.ok(
+		roleMember._sentPayloads.some((p) => p.channelId === "role-channel-1" && getContent(p.payload).includes("Welcome VIP")),
+		"expected role-based welcome message to be routed to the role's channel",
+	);
+
+	const intRoleRemove = fakeInteraction({ _subcommand: "role", role: mockRole });
+	await welcomeCommand.execute(intRoleRemove);
+	assert.ok(intRoleRemove.replies.some((r) => getContent(r.payload).includes("removed")), "expected role override to be removed");
+
+	// 16. /welcome stats
+	const intStats = fakeInteraction({ _subcommand: "stats" });
+	await welcomeCommand.execute(intStats);
+	assert.ok(intStats.replies.some((r) => getContent(r.payload).includes("Total welcomes")), "expected stats overview");
+
+	const intStatsToday = fakeInteraction({ _subcommand: "stats", period: "today" });
+	await welcomeCommand.execute(intStatsToday);
+	assert.ok(intStatsToday.replies.some((r) => getContent(r.payload).includes("Welcomes today")), "expected today stats");
+
+	// 17. /welcome-channel add / remove / list
+	const welcomeChannelCommand = registeredCommands.get("welcome-channel");
+	assert.ok(welcomeChannelCommand, "expected /welcome-channel to be registered");
+
+	const intWcAdd = fakeInteraction({
+		_subcommand: "add",
+		type: "rules",
+		channel: { id: "rules-channel-1", isTextBased: () => true, toString: () => "<#rules-channel-1>" },
+	});
+	await welcomeChannelCommand.execute(intWcAdd, ctx);
+	assert.ok(intWcAdd.replies.some((r) => getContent(r.payload).includes("rules")), "expected rules channel binding confirmation");
+
+	const intWcList = fakeInteraction({ _subcommand: "list" });
+	await welcomeChannelCommand.execute(intWcList, ctx);
+	assert.ok(intWcList.replies.some((r) => getContent(r.payload).includes("rules-channel-1")), "expected rules channel to show in bindings list");
+
+	const intWcRemove = fakeInteraction({ _subcommand: "remove", type: "rules" });
+	await welcomeChannelCommand.execute(intWcRemove, ctx);
+	assert.ok(intWcRemove.replies.some((r) => getContent(r.payload).includes("removed")), "expected rules channel binding to be removed");
+
+	// 18. Role button click assigns a role (interactionCreate)
+	const { ROLE_BUTTON_PREFIX } = require("../lib/message-builder");
+	let addedRole = null;
+	const buttonInteraction = {
+		isButton: () => true,
+		customId: `${ROLE_BUTTON_PREFIX}role-1`,
+		guild: { roles: { fetch: async (id) => (id === "role-1" ? mockRole : null) } },
+		member: {
+			roles: {
+				cache: new Map(),
+				add: async (role) => {
+					addedRole = role;
+				},
+			},
+		},
+		reply: async (payload) => {
+			buttonInteraction._replies.push(payload);
+			return payload;
+		},
+		_replies: [],
+	};
+	await emitEvent("interactionCreate", buttonInteraction);
+	assert.strictEqual(addedRole, mockRole, "expected clicking a role button to assign the role");
+	assert.ok(buttonInteraction._replies.some((p) => getContent(p).includes("New Member")), "expected role-assignment confirmation reply");
 
 	console.log("OK: all local-harness checks passed");
 }

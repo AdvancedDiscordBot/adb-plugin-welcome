@@ -1,14 +1,19 @@
-const { PermissionFlagsBits, AttachmentBuilder, EmbedBuilder } = require("discord.js");
-const { generateWelcomeCard } = require("../lib/card");
+const { PermissionFlagsBits } = require("discord.js");
+const { normalizeConfig, formatText } = require("../lib/config");
+const { listPresets, getPreset } = require("../lib/presets");
+const { SOCIAL_ORDER, SOCIAL_META } = require("../lib/social");
+const { buildEventPayload } = require("../lib/message-builder");
 
-function formatWelcomeText(text, member) {
-	if (!text) return "";
-	return text
-		.replace(/{user}/g, `<@${member.id}>`)
-		.replace(/{username}/g, member.user.username)
-		.replace(/{server}/g, member.guild.name)
-		.replace(/{guild}/g, member.guild.name)
-		.replace(/{memberCount}/g, member.guild.memberCount);
+const MAX_BACKGROUNDS = 10;
+const ALLOWED_BACKGROUND_TYPES = ["image/png", "image/jpeg", "image/gif"];
+
+async function loadConfig(ctx, guildId) {
+	const config = await ctx.db.getPluginConfig(guildId, "adb-plugin-welcome");
+	return { config, data: normalizeConfig(config.data || {}) };
+}
+
+async function save(ctx, guildId, data) {
+	await ctx.db.updatePluginConfig(guildId, "adb-plugin-welcome", data);
 }
 
 module.exports = {
@@ -18,99 +23,128 @@ module.exports = {
 		options: [
 			{
 				name: "channel",
-				description: "Set or clear the welcome channel",
-				type: 1, // SUB_COMMAND
-				options: [
-					{
-						name: "channel",
-						description: "The channel to send welcome messages in (leave empty to disable)",
-						type: 7, // CHANNEL
-						required: false,
-					},
-				],
+				description: "Set or clear the default welcome channel",
+				type: 1,
+				options: [{ name: "channel", description: "The channel to send welcome messages in (leave empty to disable)", type: 7, required: false }],
 			},
 			{
 				name: "message",
-				description: "Set the welcome message text",
-				type: 1, // SUB_COMMAND
-				options: [
-					{
-						name: "text",
-						description: "Welcome text. Use placeholders: {user}, {username}, {server}, {memberCount}",
-						type: 3, // STRING
-						required: true,
-					},
-				],
+				description: "Set the default welcome message text",
+				type: 1,
+				options: [{ name: "text", description: "Welcome text. Use placeholders: {user}, {username}, {server}, {memberCount}, {rulesChannel}", type: 3, required: true }],
 			},
 			{
 				name: "goodbye-channel",
 				description: "Set or clear the goodbye channel",
-				type: 1, // SUB_COMMAND
-				options: [
-					{
-						name: "channel",
-						description: "The channel to send goodbye messages in (leave empty to disable)",
-						type: 7, // CHANNEL
-						required: false,
-					},
-				],
+				type: 1,
+				options: [{ name: "channel", description: "The channel to send goodbye messages in (leave empty to disable)", type: 7, required: false }],
 			},
 			{
 				name: "goodbye-message",
 				description: "Set the goodbye message text",
-				type: 1, // SUB_COMMAND
-				options: [
-					{
-						name: "text",
-						description: "Goodbye text. Use placeholders: {username}, {server}, {memberCount}",
-						type: 3, // STRING
-						required: true,
-					},
-				],
+				type: 1,
+				options: [{ name: "text", description: "Goodbye text. Use placeholders: {username}, {server}, {memberCount}", type: 3, required: true }],
 			},
 			{
 				name: "dm",
 				description: "Toggle welcome messages in Direct Messages (DM)",
-				type: 1, // SUB_COMMAND
-				options: [
-					{
-						name: "status",
-						description: "Choose ON or OFF",
-						type: 3, // STRING
-						required: true,
-						choices: [
-							{ name: "on", value: "on" },
-							{ name: "off", value: "off" },
-						],
-					},
-				],
+				type: 1,
+				options: [{ name: "status", description: "Choose ON or OFF", type: 3, required: true, choices: [{ name: "on", value: "on" }, { name: "off", value: "off" }] }],
 			},
 			{
 				name: "card",
 				description: "Toggle welcome/goodbye image cards",
-				type: 1, // SUB_COMMAND
+				type: 1,
+				options: [{ name: "status", description: "Choose ON or OFF", type: 3, required: true, choices: [{ name: "on", value: "on" }, { name: "off", value: "off" }] }],
+			},
+			{ name: "preview", description: "Preview the welcome card/message in the current channel", type: 1 },
+			{ name: "test", description: "Simulate a real welcome and goodbye event", type: 1 },
+			{
+				name: "role",
+				description: "Set a role-specific welcome channel",
+				type: 1,
 				options: [
-					{
-						name: "status",
-						description: "Choose ON or OFF",
-						type: 3, // STRING
-						required: true,
-						choices: [
-							{ name: "on", value: "on" },
-							{ name: "off", value: "off" },
-						],
-					},
+					{ name: "role", description: "The role to match", type: 8, required: true },
+					{ name: "channel", description: "Welcome channel for this role (leave empty to remove)", type: 7, required: false },
 				],
 			},
 			{
-				name: "preview",
-				description: "Preview the welcome card/message in the current channel",
-				type: 1, // SUB_COMMAND
+				name: "role-message",
+				description: "Set a role-specific welcome message",
+				type: 1,
+				options: [
+					{ name: "role", description: "The role to match", type: 8, required: true },
+					{ name: "text", description: "Welcome text for this role", type: 3, required: true },
+				],
 			},
 			{
-				name: "test",
-				description: "Simulate a real welcome and goodbye event",
-				type: 1, // SUB_COMMAND
+				name: "background",
+				description: "Custom welcome card backgrounds",
+				type: 2,
+				options: [
+					{ name: "upload", description: "Upload a custom background image (PNG/JPG/GIF)", type: 1, options: [{ name: "image", description: "The background image", type: 11, required: true }] },
+					{ name: "default", description: "Restore the default background", type: 1 },
+					{ name: "list", description: "List uploaded backgrounds", type: 1 },
+					{
+						name: "set",
+						description: "Set a background as server default or for a specific role/channel",
+						type: 1,
+						options: [
+							{ name: "id", description: "Background id (uploaded id or preset id)", type: 3, required: true },
+							{ name: "channel", description: "Apply only to this channel", type: 7, required: false },
+							{ name: "role", description: "Apply only to this role", type: 8, required: false },
+						],
+					},
+					{ name: "presets", description: "List built-in preset backgrounds", type: 1 },
+				],
+			},
+			{
+				name: "social",
+				description: "Social media links shown on the welcome card",
+				type: 2,
+				options: SOCIAL_ORDER.map(platform => ({
+					name: platform,
+					description: `Set or clear ${SOCIAL_META[platform].label} link`,
+					type: 1,
+					options: [{ name: "url", description: "Invite / URL / handle (leave empty to clear)", type: 3, required: false }]
+				})),
+			},
+			{
+				name: "button",
+				description: "Interactive buttons on the welcome message",
+				type: 2,
+				options: [
+					{
+						name: "add",
+						description: "Add a link or role button",
+						type: 1,
+						options: [
+							{ name: "label", description: "Button label", type: 3, required: true },
+							{ name: "url", description: "URL the button links to (if link button)", type: 3, required: false },
+							{ name: "role", description: "Role to assign on click (if role button)", type: 8, required: false },
+						],
+					},
+					{ name: "remove", description: "Remove a button by label", type: 1, options: [{ name: "label", description: "Label of the button to remove", type: 3, required: true }] },
+					{ name: "list", description: "List configured buttons", type: 1 },
+				],
+			},
+			{ name: "embed-color", description: "Accent color as a hex code, e.g. #FF69B4", type: 1, options: [{ name: "hex", description: "Hex color code", type: 3, required: true }] },
+			{ name: "embed-title", description: "Custom welcome title", type: 1, options: [{ name: "text", description: "Use {user}, {username}, {server}, {memberCount}", type: 3, required: true }] },
+			{ name: "embed-description", description: "Extra text below the welcome message", type: 1, options: [{ name: "text", description: "Extra description text", type: 3, required: true }] },
+			{ name: "embed-footer", description: "Footer text", type: 1, options: [{ name: "text", description: "Use {user}, {username}, {server}, {memberCount}", type: 3, required: true }] },
+			{
+				name: "embed-thumbnail",
+				description: "Choose the embed thumbnail",
+				type: 1,
+				options: [{ name: "source", description: "Thumbnail source", type: 3, required: true, choices: [{ name: "user", value: "user" }, { name: "server", value: "server" }, { name: "none", value: "none" }] }],
+			},
+			{
+				name: "stats",
+				description: "Welcome/goodbye statistics",
+				type: 1,
+				options: [
+					{ name: "period", description: "Filter period", type: 3, required: false, choices: [{ name: "today", value: "today" }] }
+				],
 			},
 		],
 		toJSON() {
@@ -119,336 +153,370 @@ module.exports = {
 	},
 
 	async execute(interaction, ctx) {
-		// Enforce ManageGuild permission
 		if (!interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
-			return interaction.reply({
-				content: "❌ You need the **Manage Server** permission to use this command.",
-				ephemeral: true,
-			});
+			return interaction.reply({ content: "❌ You need the **Manage Server** permission to use this command.", ephemeral: true });
 		}
 
+		const group = interaction.options.getSubcommandGroup(false);
 		const subcommand = interaction.options.getSubcommand();
-		const config = await ctx.db.getPluginConfig(interaction.guildId, "adb-plugin-welcome");
-		if (!config.data) {
-			config.data = {};
-		}
+		const guildId = interaction.guildId;
+		const { data } = await loadConfig(ctx, guildId);
 
-		if (subcommand === "channel") {
-			const channel = interaction.options.getChannel("channel");
-			if (channel) {
-				if (!channel.isTextBased()) {
-					return interaction.reply({
-						content: "❌ Selected channel must be a text-based channel.",
-						ephemeral: true,
-					});
-				}
-				config.data.welcomeChannelId = channel.id;
-				await ctx.db.updatePluginConfig(interaction.guildId, "adb-plugin-welcome", config.data);
-				return interaction.reply({
-					content: `✅ Welcome messages will now be sent in ${channel}.`,
-					ephemeral: true,
-				});
-			} else {
-				config.data.welcomeChannelId = null;
-				await ctx.db.updatePluginConfig(interaction.guildId, "adb-plugin-welcome", config.data);
-				return interaction.reply({
-					content: "✅ Welcome channel disabled.",
-					ephemeral: true,
-				});
-			}
-		}
+		if (group === "background") return handleBackground(interaction, ctx, guildId, data, subcommand);
+		if (group === "social") return handleSocial(interaction, ctx, guildId, data, subcommand);
+		if (group === "button") return handleButton(interaction, ctx, guildId, data, subcommand);
 
-		if (subcommand === "message") {
-			const text = interaction.options.getString("text");
-			config.data.welcomeMessage = text;
-			await ctx.db.updatePluginConfig(interaction.guildId, "adb-plugin-welcome", config.data);
-			return interaction.reply({
-				content: `✅ Welcome message updated.\n**Preview:** ${text}`,
-				ephemeral: true,
-			});
-		}
+		if (subcommand === "role" || subcommand === "role-message") return handleRole(interaction, ctx, guildId, data, subcommand);
+		if (subcommand.startsWith("embed-")) return handleEmbed(interaction, ctx, guildId, data, subcommand);
+		if (subcommand === "stats") return handleStats(interaction, data);
 
-		if (subcommand === "goodbye-channel") {
-			const channel = interaction.options.getChannel("channel");
-			if (channel) {
-				if (!channel.isTextBased()) {
-					return interaction.reply({
-						content: "❌ Selected channel must be a text-based channel.",
-						ephemeral: true,
-					});
-				}
-				config.data.goodbyeChannelId = channel.id;
-				await ctx.db.updatePluginConfig(interaction.guildId, "adb-plugin-welcome", config.data);
-				return interaction.reply({
-					content: `✅ Goodbye messages will now be sent in ${channel}.`,
-					ephemeral: true,
-				});
-			} else {
-				config.data.goodbyeChannelId = null;
-				await ctx.db.updatePluginConfig(interaction.guildId, "adb-plugin-welcome", config.data);
-				return interaction.reply({
-					content: "✅ Goodbye channel disabled.",
-					ephemeral: true,
-				});
-			}
-		}
-
-		if (subcommand === "goodbye-message") {
-			const text = interaction.options.getString("text");
-			config.data.goodbyeMessage = text;
-			await ctx.db.updatePluginConfig(interaction.guildId, "adb-plugin-welcome", config.data);
-			return interaction.reply({
-				content: `✅ Goodbye message updated.\n**Preview:** ${text}`,
-				ephemeral: true,
-			});
-		}
-
-		if (subcommand === "dm") {
-			const status = interaction.options.getString("status");
-			config.data.dmEnabled = status === "on";
-			await ctx.db.updatePluginConfig(interaction.guildId, "adb-plugin-welcome", config.data);
-			return interaction.reply({
-				content: `✅ Welcome DMs are now turned **${status.toUpperCase()}**.`,
-				ephemeral: true,
-			});
-		}
-
-		if (subcommand === "card") {
-			const status = interaction.options.getString("status");
-			config.data.cardEnabled = status === "on";
-			await ctx.db.updatePluginConfig(interaction.guildId, "adb-plugin-welcome", config.data);
-			return interaction.reply({
-				content: `✅ Welcome/Goodbye image cards are now turned **${status.toUpperCase()}**.`,
-				ephemeral: true,
-			});
-		}
-
-		if (subcommand === "preview") {
-			await interaction.deferReply();
-			const welcomeText =
-				config.data.welcomeMessage || "Welcome to the server, {user}! You are member #{memberCount}.";
-			const goodbyeText = config.data.goodbyeMessage || "Goodbye {username}! We will miss you.";
-			const cardEnabled = config.data.cardEnabled;
-
-			const files = [];
-			const embeds = [];
-
-			// 1. Welcome Preview
-			const formattedWelcome = formatWelcomeText(welcomeText, interaction.member);
-			const welcomeEmbed = new EmbedBuilder()
-				.setColor(0x5865f2)
-				.setTitle("👋 Welcome Preview")
-				.setDescription(formattedWelcome)
-				.setTimestamp();
-
-			if (cardEnabled) {
-				try {
-					const avatarUrl = interaction.member.user.displayAvatarURL({ extension: "png", size: 256 });
-					const serverIconUrl = interaction.guild.iconURL({ extension: "png", size: 128 });
-					const welcomeBuffer = await generateWelcomeCard({
-						avatarUrl,
-						username: interaction.member.user.username,
-						serverIconUrl,
-						serverName: interaction.guild.name,
-						memberCount: interaction.guild.memberCount,
-						isWelcome: true,
-					});
-					const welcomeAttachment = new AttachmentBuilder(welcomeBuffer, { name: "welcome.png" });
-					files.push(welcomeAttachment);
-					welcomeEmbed.setImage("attachment://welcome.png");
-				} catch (err) {
-					ctx.logger.error("Failed to generate welcome preview card", err);
-				}
-			}
-			embeds.push(welcomeEmbed);
-
-			// 2. Goodbye Preview
-			const formattedGoodbye = formatWelcomeText(goodbyeText, interaction.member);
-			const goodbyeEmbed = new EmbedBuilder()
-				.setColor(0xed4245)
-				.setTitle("🚪 Goodbye Preview")
-				.setDescription(formattedGoodbye)
-				.setTimestamp();
-
-			if (cardEnabled) {
-				try {
-					const avatarUrl = interaction.member.user.displayAvatarURL({ extension: "png", size: 256 });
-					const serverIconUrl = interaction.guild.iconURL({ extension: "png", size: 128 });
-					const goodbyeBuffer = await generateWelcomeCard({
-						avatarUrl,
-						username: interaction.member.user.username,
-						serverIconUrl,
-						serverName: interaction.guild.name,
-						memberCount: interaction.guild.memberCount,
-						isWelcome: false,
-					});
-					const goodbyeAttachment = new AttachmentBuilder(goodbyeBuffer, { name: "goodbye.png" });
-					files.push(goodbyeAttachment);
-					goodbyeEmbed.setImage("attachment://goodbye.png");
-				} catch (err) {
-					ctx.logger.error("Failed to generate goodbye preview card", err);
-				}
-			}
-			embeds.push(goodbyeEmbed);
-
-			return interaction.editReply({
-				content: "🎨 **Welcome & Goodbye Preview:**",
-				embeds,
-				files,
-			});
-		}
-
-		if (subcommand === "test") {
-			await interaction.deferReply();
-
-			const data = config.data || {};
-			const welcomeText =
-				data.welcomeMessage || "Welcome to the server, {user}! You are member #{memberCount}.";
-			const goodbyeText = data.goodbyeMessage || "Goodbye {username}! We will miss you.";
-			const cardEnabled = data.cardEnabled;
-			const welcomeChannelId = data.welcomeChannelId;
-			const goodbyeChannelId = data.goodbyeChannelId;
-			const dmEnabled = data.dmEnabled;
-
-			let welcomeSent = false;
-			let welcomeDmSent = false;
-			let goodbyeSent = false;
-
-			// Generate Welcome Embed
-			const formattedWelcome = formatWelcomeText(welcomeText, interaction.member);
-			const welcomeEmbed = new EmbedBuilder()
-				.setColor(0x5865f2)
-				.setTitle(`Welcome to ${interaction.guild.name}!`)
-				.setDescription(formattedWelcome)
-				.setTimestamp();
-
-			let welcomeAttachment;
-			if (cardEnabled) {
-				try {
-					const avatarUrl = interaction.member.user.displayAvatarURL({ extension: "png", size: 256 });
-					const serverIconUrl = interaction.guild.iconURL({ extension: "png", size: 128 });
-					const welcomeBuffer = await generateWelcomeCard({
-						avatarUrl,
-						username: interaction.member.user.username,
-						serverIconUrl,
-						serverName: interaction.guild.name,
-						memberCount: interaction.guild.memberCount,
-						isWelcome: true,
-					});
-					welcomeAttachment = new AttachmentBuilder(welcomeBuffer, { name: "welcome.png" });
-					welcomeEmbed.setImage("attachment://welcome.png");
-				} catch (err) {
-					ctx.logger.error("Failed to generate welcome test card", err);
-				}
-			}
-
-			// Send welcome to channel
-			if (welcomeChannelId) {
-				const welcomeChannel = await interaction.guild.channels.fetch(welcomeChannelId).catch(() => null);
-				if (welcomeChannel?.isTextBased()) {
-					const sendPayload = {
-						content: formattedWelcome,
-						embeds: [welcomeEmbed],
-					};
-					if (welcomeAttachment) {
-						sendPayload.files = [welcomeAttachment];
-					}
-					await welcomeChannel.send(sendPayload).catch(() => {});
-					welcomeSent = true;
-				}
-			}
-
-			// Send welcome to DM
-			if (dmEnabled) {
-				let dmAttachment;
-				if (cardEnabled) {
-					try {
-						const avatarUrl = interaction.member.user.displayAvatarURL({ extension: "png", size: 256 });
-						const serverIconUrl = interaction.guild.iconURL({ extension: "png", size: 128 });
-						const welcomeBuffer = await generateWelcomeCard({
-							avatarUrl,
-							username: interaction.member.user.username,
-							serverIconUrl,
-							serverName: interaction.guild.name,
-							memberCount: interaction.guild.memberCount,
-							isWelcome: true,
-						});
-						dmAttachment = new AttachmentBuilder(welcomeBuffer, { name: "welcome-dm.png" });
-						welcomeEmbed.setImage("attachment://welcome-dm.png");
-					} catch (err) {
-						ctx.logger.error("Failed to generate welcome test card for DM", err);
-					}
-				}
-
-				await interaction.user
-					.send({
-						content: formattedWelcome,
-						embeds: [welcomeEmbed],
-						files: dmAttachment ? [dmAttachment] : [],
-					})
-					.then(() => {
-						welcomeDmSent = true;
-					})
-					.catch((err) => {
-						ctx.logger.error("Failed to send test welcome DM to user", err);
-					});
-			}
-
-			// Generate Goodbye Embed
-			const formattedGoodbye = formatWelcomeText(goodbyeText, interaction.member);
-			const goodbyeEmbed = new EmbedBuilder()
-				.setColor(0xed4245)
-				.setTitle(`Goodbye from ${interaction.guild.name}!`)
-				.setDescription(formattedGoodbye)
-				.setTimestamp();
-
-			let goodbyeAttachment;
-			if (cardEnabled) {
-				try {
-					const avatarUrl = interaction.member.user.displayAvatarURL({ extension: "png", size: 256 });
-					const serverIconUrl = interaction.guild.iconURL({ extension: "png", size: 128 });
-					const goodbyeBuffer = await generateWelcomeCard({
-						avatarUrl,
-						username: interaction.member.user.username,
-						serverIconUrl,
-						serverName: interaction.guild.name,
-						memberCount: interaction.guild.memberCount,
-						isWelcome: false,
-					});
-					goodbyeAttachment = new AttachmentBuilder(goodbyeBuffer, { name: "goodbye.png" });
-					goodbyeEmbed.setImage("attachment://goodbye.png");
-				} catch (err) {
-					ctx.logger.error("Failed to generate goodbye test card", err);
-				}
-			}
-
-			// Send goodbye to channel
-			if (goodbyeChannelId) {
-				const goodbyeChannel = await interaction.guild.channels.fetch(goodbyeChannelId).catch(() => null);
-				if (goodbyeChannel?.isTextBased()) {
-					const sendPayload = {
-						content: formattedGoodbye,
-						embeds: [goodbyeEmbed],
-					};
-					if (goodbyeAttachment) {
-						sendPayload.files = [goodbyeAttachment];
-					}
-					await goodbyeChannel.send(sendPayload).catch(() => {});
-					goodbyeSent = true;
-				}
-			}
-
-			// Send summary report
-			const statusLines = [
-				`📢 **Welcome Channel:** ${welcomeChannelId ? (welcomeSent ? "✅ Sent successfully" : "❌ Failed to send") : "⏸️ Not configured"}`,
-				`📥 **Welcome DM:** ${dmEnabled ? (welcomeDmSent ? "✅ Sent successfully" : "❌ Failed (DMs blocked?)") : "⏸️ Disabled"}`,
-				`🚪 **Goodbye Channel:** ${goodbyeChannelId ? (goodbyeSent ? "✅ Sent successfully" : "❌ Failed to send") : "⏸️ Not configured"}`,
-			];
-
-			return interaction.editReply({
-				content: `🧪 **Test Simulations Completed!**\n\n${statusLines.join("\n")}`,
-			});
-		}
+		return handleLegacy(interaction, ctx, guildId, data, subcommand);
 	},
-	formatWelcomeText,
+
+	formatWelcomeText: formatText,
 };
+
+// --- Legacy top-level subcommands (backward compatible) --------------------
+
+async function handleLegacy(interaction, ctx, guildId, data, subcommand) {
+	if (subcommand === "channel") {
+		const channel = interaction.options.getChannel("channel");
+		if (channel) {
+			if (!channel.isTextBased()) {
+				return interaction.reply({ content: "❌ Selected channel must be a text-based channel.", ephemeral: true });
+			}
+			data.welcomeChannelId = channel.id;
+			await save(ctx, guildId, data);
+			return interaction.reply({ content: `✅ Welcome messages will now be sent in ${channel}.`, ephemeral: true });
+		}
+		data.welcomeChannelId = null;
+		await save(ctx, guildId, data);
+		return interaction.reply({ content: "✅ Welcome channel disabled.", ephemeral: true });
+	}
+
+	if (subcommand === "message") {
+		const text = interaction.options.getString("text");
+		data.welcomeMessage = text;
+		await save(ctx, guildId, data);
+		return interaction.reply({ content: `✅ Welcome message updated.\n**Preview:** ${text}`, ephemeral: true });
+	}
+
+	if (subcommand === "goodbye-channel") {
+		const channel = interaction.options.getChannel("channel");
+		if (channel) {
+			if (!channel.isTextBased()) {
+				return interaction.reply({ content: "❌ Selected channel must be a text-based channel.", ephemeral: true });
+			}
+			data.goodbyeChannelId = channel.id;
+			await save(ctx, guildId, data);
+			return interaction.reply({ content: `✅ Goodbye messages will now be sent in ${channel}.`, ephemeral: true });
+		}
+		data.goodbyeChannelId = null;
+		await save(ctx, guildId, data);
+		return interaction.reply({ content: "✅ Goodbye channel disabled.", ephemeral: true });
+	}
+
+	if (subcommand === "goodbye-message") {
+		const text = interaction.options.getString("text");
+		data.goodbyeMessage = text;
+		await save(ctx, guildId, data);
+		return interaction.reply({ content: `✅ Goodbye message updated.\n**Preview:** ${text}`, ephemeral: true });
+	}
+
+	if (subcommand === "dm") {
+		const status = interaction.options.getString("status");
+		data.dmEnabled = status === "on";
+		await save(ctx, guildId, data);
+		return interaction.reply({ content: `✅ Welcome DMs are now turned **${status.toUpperCase()}**.`, ephemeral: true });
+	}
+
+	if (subcommand === "card") {
+		const status = interaction.options.getString("status");
+		data.cardEnabled = status === "on";
+		await save(ctx, guildId, data);
+		return interaction.reply({ content: `✅ Welcome/Goodbye image cards are now turned **${status.toUpperCase()}**.`, ephemeral: true });
+	}
+
+	if (subcommand === "preview") {
+		await interaction.deferReply();
+		const welcomePayload = await buildEventPayload(data, interaction.member, true);
+		const goodbyePayload = await buildEventPayload(data, interaction.member, false);
+
+		const files = [welcomePayload.attachment, goodbyePayload.attachment].filter(Boolean);
+		return interaction.editReply({
+			content: "🎨 **Welcome & Goodbye Preview:**",
+			embeds: [welcomePayload.embed, goodbyePayload.embed],
+			files,
+			components: welcomePayload.components,
+		});
+	}
+
+	if (subcommand === "test") {
+		await interaction.deferReply();
+		const welcomePayload = await buildEventPayload(data, interaction.member, true);
+		const goodbyePayload = await buildEventPayload(data, interaction.member, false);
+
+		let welcomeSent = false;
+		let welcomeDmSent = false;
+		let goodbyeSent = false;
+
+		for (const channelId of welcomePayload.channelIds) {
+			const channel = await interaction.guild.channels.fetch(channelId).catch(() => null);
+			if (channel?.isTextBased()) {
+				await channel
+					.send({ content: welcomePayload.text, embeds: [welcomePayload.embed], files: welcomePayload.attachment ? [welcomePayload.attachment] : [], components: welcomePayload.components })
+					.catch(() => {});
+				welcomeSent = true;
+			}
+		}
+
+		if (data.dmEnabled) {
+			await interaction.user
+				.send({ content: welcomePayload.text, embeds: [welcomePayload.embed], files: welcomePayload.attachment ? [welcomePayload.attachment] : [] })
+				.then(() => {
+					welcomeDmSent = true;
+				})
+				.catch(() => {});
+		}
+
+		for (const channelId of goodbyePayload.channelIds) {
+			const channel = await interaction.guild.channels.fetch(channelId).catch(() => null);
+			if (channel?.isTextBased()) {
+				await channel.send({ content: goodbyePayload.text, embeds: [goodbyePayload.embed], files: goodbyePayload.attachment ? [goodbyePayload.attachment] : [] }).catch(() => {});
+				goodbyeSent = true;
+			}
+		}
+
+		const statusLines = [
+			`📢 **Welcome Channel:** ${welcomePayload.channelIds.length ? (welcomeSent ? "✅ Sent successfully" : "❌ Failed to send") : "⏸️ Not configured"}`,
+			`📥 **Welcome DM:** ${data.dmEnabled ? (welcomeDmSent ? "✅ Sent successfully" : "❌ Failed (DMs blocked?)") : "⏸️ Disabled"}`,
+			`🚪 **Goodbye Channel:** ${goodbyePayload.channelIds.length ? (goodbyeSent ? "✅ Sent successfully" : "❌ Failed to send") : "⏸️ Not configured"}`,
+		];
+
+		return interaction.editReply({ content: `🧪 **Test Simulations Completed!**\n\n${statusLines.join("\n")}` });
+	}
+}
+
+async function handleRole(interaction, ctx, guildId, data, subcommand) {
+	if (subcommand === "role") {
+		const role = interaction.options.getRole("role");
+		const channel = interaction.options.getChannel("channel");
+
+		let entry = data.roleMessages.find((e) => e.roleId === role.id);
+		if (!entry) {
+			if (!channel) return interaction.reply({ content: `❌ No existing welcome override found for ${role}.`, ephemeral: true });
+			entry = { roleId: role.id, text: "", channelId: "" };
+			data.roleMessages.push(entry);
+		}
+		
+		if (!channel) {
+			// Remove channel override. If text is also empty, remove entry entirely.
+			entry.channelId = "";
+			if (!entry.text) {
+				data.roleMessages = data.roleMessages.filter(e => e.roleId !== role.id);
+			}
+			await save(ctx, guildId, data);
+			return interaction.reply({ content: `✅ Welcome channel override removed for ${role}.`, ephemeral: true });
+		}
+
+		entry.channelId = channel.id;
+		await save(ctx, guildId, data);
+		return interaction.reply({ content: `✅ Welcome channel for ${role} set to ${channel}.`, ephemeral: true });
+	}
+
+	if (subcommand === "role-message") {
+		const role = interaction.options.getRole("role");
+		const message = interaction.options.getString("text");
+
+		let entry = data.roleMessages.find((e) => e.roleId === role.id);
+		if (!entry) {
+			entry = { roleId: role.id, text: "", channelId: "" };
+			data.roleMessages.push(entry);
+		}
+		entry.text = message;
+
+		await save(ctx, guildId, data);
+		return interaction.reply({ content: `✅ Welcome message override set for ${role}.`, ephemeral: true });
+	}
+}
+
+// --- /welcome background -----------------------------------------------------
+
+async function handleBackground(interaction, ctx, guildId, data, subcommand) {
+	if (subcommand === "upload") {
+		const attachment = interaction.options.getAttachment("image");
+		if (!attachment) return interaction.reply({ content: "❌ No image provided.", ephemeral: true });
+		if (attachment.contentType && !ALLOWED_BACKGROUND_TYPES.includes(attachment.contentType)) {
+			return interaction.reply({ content: "❌ Unsupported file type. Use PNG, JPG, or GIF.", ephemeral: true });
+		}
+		if (data.backgrounds.length >= MAX_BACKGROUNDS) {
+			return interaction.reply({ content: `❌ You already have ${MAX_BACKGROUNDS} backgrounds uploaded. Remove one first (\`/welcome background list\`).`, ephemeral: true });
+		}
+
+		const id = `bg-${Date.now().toString(36)}`;
+		data.backgrounds.push({ id, url: attachment.url, uploadedBy: interaction.user.id });
+		await save(ctx, guildId, data);
+		return interaction.reply({ content: `✅ Background uploaded. Use \`/welcome background set ${id}\` to apply it.`, ephemeral: true });
+	}
+
+	if (subcommand === "default") {
+		data.defaultBackground = null;
+		await save(ctx, guildId, data);
+		return interaction.reply({ content: "✅ Restored the default background.", ephemeral: true });
+	}
+
+	if (subcommand === "list") {
+		if (data.backgrounds.length === 0) {
+			return interaction.reply({ content: "No custom backgrounds uploaded yet.", ephemeral: true });
+		}
+		const lines = data.backgrounds.map((b) => `• \`${b.id}\` — uploaded by <@${b.uploadedBy}>`);
+		return interaction.reply({ content: `**Uploaded backgrounds (${data.backgrounds.length}/${MAX_BACKGROUNDS}):**\n${lines.join("\n")}`, ephemeral: true });
+	}
+
+	if (subcommand === "presets") {
+		const byCategory = new Map();
+		for (const preset of listPresets()) {
+			if (!byCategory.has(preset.category)) byCategory.set(preset.category, []);
+			byCategory.get(preset.category).push(preset);
+		}
+		const lines = [...byCategory.entries()].map(([category, presets]) => `**${category}:** ${presets.map((p) => `\`${p.id}\` (${p.label})`).join(", ")}`);
+		return interaction.reply({ content: `**Built-in presets:**\n${lines.join("\n")}`, ephemeral: true });
+	}
+
+	if (subcommand === "set") {
+		const id = interaction.options.getString("id");
+		const channel = interaction.options.getChannel("channel");
+		const role = interaction.options.getRole("role");
+		const isUploaded = data.backgrounds.some((b) => b.id === id);
+		const isPreset = Boolean(getPreset(id));
+		if (!isUploaded && !isPreset) {
+			return interaction.reply({ content: `❌ Unknown background id \`${id}\`. Check \`/welcome background list\` or \`/welcome background presets\`.`, ephemeral: true });
+		}
+
+		if (channel) {
+			data.channelBackgrounds[channel.id] = id;
+			await save(ctx, guildId, data);
+			return interaction.reply({ content: `✅ Background \`${id}\` set for channel ${channel}.`, ephemeral: true });
+		}
+
+		if (role) {
+			data.roleBackgrounds[role.id] = id;
+			await save(ctx, guildId, data);
+			return interaction.reply({ content: `✅ Background \`${id}\` set for ${role}.`, ephemeral: true });
+		}
+
+		data.defaultBackground = id;
+		await save(ctx, guildId, data);
+		return interaction.reply({ content: `✅ Server default background set to \`${id}\`.`, ephemeral: true });
+	}
+}
+
+// --- /welcome social ----------------------------------------------------------
+
+async function handleSocial(interaction, ctx, guildId, data, platform) {
+	const value = interaction.options.getString("url") || "";
+	data.social[platform] = value;
+	await save(ctx, guildId, data);
+	return interaction.reply({ content: value ? `✅ ${SOCIAL_META[platform].label} link set.` : `✅ ${SOCIAL_META[platform].label} link cleared.`, ephemeral: true });
+}
+
+// --- /welcome button ----------------------------------------------------------
+
+async function handleButton(interaction, ctx, guildId, data, subcommand) {
+	if (subcommand === "add") {
+		const label = interaction.options.getString("label");
+		const url = interaction.options.getString("url");
+		const role = interaction.options.getRole("role");
+		
+		if (!url && !role) {
+			return interaction.reply({ content: `❌ You must provide either a URL (for a link button) or a Role (for a role button).`, ephemeral: true });
+		}
+
+		if (data.buttons.some((b) => b.label === label)) {
+			return interaction.reply({ content: `❌ A button labeled "${label}" already exists.`, ephemeral: true });
+		}
+		if (data.buttons.length >= 25) {
+			return interaction.reply({ content: "❌ Maximum of 25 buttons reached.", ephemeral: true });
+		}
+
+		if (url) {
+			data.buttons.push({ label, url, type: "link", roleId: "" });
+		} else {
+			data.buttons.push({ label, url: "", type: "role", roleId: role.id });
+		}
+
+		await save(ctx, guildId, data);
+		return interaction.reply({ content: `✅ Button "${label}" added.`, ephemeral: true });
+	}
+
+	if (subcommand === "remove") {
+		const label = interaction.options.getString("label");
+		const before = data.buttons.length;
+		data.buttons = data.buttons.filter((b) => b.label !== label);
+		await save(ctx, guildId, data);
+		return interaction.reply({ content: before === data.buttons.length ? `❌ No button labeled "${label}" found.` : `✅ Button "${label}" removed.`, ephemeral: true });
+	}
+
+	if (subcommand === "list") {
+		if (data.buttons.length === 0) {
+			return interaction.reply({ content: "No buttons configured.", ephemeral: true });
+		}
+		const lines = data.buttons.map((b) => (b.type === "role" ? `• 🎭 "${b.label}" → <@&${b.roleId}>` : `• 🔗 "${b.label}" → ${b.url}`));
+		return interaction.reply({ content: `**Welcome buttons:**\n${lines.join("\n")}`, ephemeral: true });
+	}
+}
+
+// --- /welcome embed ----------------------------------------------------------
+
+async function handleEmbed(interaction, ctx, guildId, data, subcommand) {
+	if (subcommand === "embed-color") {
+		const hex = interaction.options.getString("hex");
+		if (!/^#?[0-9a-fA-F]{6}$/.test(hex)) {
+			return interaction.reply({ content: "❌ Invalid hex color. Example: `#FF69B4`.", ephemeral: true });
+		}
+		data.embed.color = hex.startsWith("#") ? hex : `#${hex}`;
+		await save(ctx, guildId, data);
+		return interaction.reply({ content: `✅ Embed color set to \`${data.embed.color}\`.`, ephemeral: true });
+	}
+
+	if (subcommand === "embed-title") {
+		data.embed.title = interaction.options.getString("text");
+		await save(ctx, guildId, data);
+		return interaction.reply({ content: "✅ Embed title updated.", ephemeral: true });
+	}
+
+	if (subcommand === "embed-description") {
+		data.embed.description = interaction.options.getString("text");
+		await save(ctx, guildId, data);
+		return interaction.reply({ content: "✅ Embed description updated.", ephemeral: true });
+	}
+
+	if (subcommand === "embed-footer") {
+		data.embed.footer = interaction.options.getString("text");
+		await save(ctx, guildId, data);
+		return interaction.reply({ content: "✅ Embed footer updated.", ephemeral: true });
+	}
+
+	if (subcommand === "embed-thumbnail") {
+		data.embed.thumbnail = interaction.options.getString("source");
+		await save(ctx, guildId, data);
+		return interaction.reply({ content: `✅ Embed thumbnail set to \`${data.embed.thumbnail}\`.`, ephemeral: true });
+	}
+}
+
+// --- /welcome stats ----------------------------------------------------------
+
+async function handleStats(interaction, data) {
+	const period = interaction.options.getString("period");
+	if (period === "today") {
+		const today = new Date().toISOString().slice(0, 10);
+		const count = data.stats.today && data.stats.today.date === today ? data.stats.today.count : 0;
+		return interaction.reply({ content: `📊 Welcomes today: **${count}**`, ephemeral: true });
+	}
+
+	const since = data.stats.since ? `<t:${Math.floor(new Date(data.stats.since).getTime() / 1000)}:D>` : "N/A";
+	return interaction.reply({
+		content: `📊 **Welcome Stats**\n👋 Total welcomes: **${data.stats.welcomeCount}**\n🚪 Total goodbyes: **${data.stats.goodbyeCount}**\n📅 Active since: ${since}`,
+		ephemeral: true,
+	});
+}
