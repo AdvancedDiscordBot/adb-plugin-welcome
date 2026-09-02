@@ -84,7 +84,7 @@ function fakeInteraction(options = {}) {
 }
 
 async function main() {
-	const { ctx, registeredCommands, registeredEvents, emitEvent } = createMockCtx({
+	const { ctx, registeredCommands, registeredEvents, emitEvent, models } = createMockCtx({
 		pluginName: "adb-plugin-welcome",
 	});
 
@@ -209,6 +209,17 @@ async function main() {
 		mockMember._sentPayloads.some((p) => p.type === "dm"),
 		"expected welcome message to be sent to member DM",
 	);
+
+	// Join history doc created by guildMemberAdd
+	const JoinHistoryModel = models.get("plugin_adb-plugin-welcome_joinHistory");
+	assert.ok(JoinHistoryModel, "expected joinHistory model to be defined");
+
+	const historyQuery = { guildId: "test-guild-id", userId: "member-456" };
+	let history = await JoinHistoryModel.findOne(historyQuery);
+	assert.ok(history, "expected join history doc after guildMemberAdd");
+	assert.ok(history.joinedAt instanceof Date, "expected joinedAt to be set");
+	assert.strictEqual(history.leftAt, null, "expected leftAt to be null after join");
+	assert.strictEqual(history.welcomed, true, "expected welcomed to be true after welcome message sent");
 
 	// Reset payloads
 	mockMember._sentPayloads = [];
@@ -385,6 +396,20 @@ async function main() {
 	await emitEvent("interactionCreate", buttonInteraction);
 	assert.strictEqual(addedRole, mockRole, "expected clicking a role button to assign the role");
 	assert.ok(buttonInteraction._replies.some((p) => getContent(p).includes("New Member")), "expected role-assignment confirmation reply");
+
+	// Join history doc updated by guildMemberRemove
+	history = await JoinHistoryModel.findOne(historyQuery);
+	assert.ok(history.leftAt instanceof Date, "expected leftAt to be set after guildMemberRemove");
+
+	// Rejoin updates the existing doc (leftAt reset)
+	await emitEvent("guildMemberAdd", mockMember);
+	history = await JoinHistoryModel.findOne(historyQuery);
+	assert.strictEqual(history.leftAt, null, "expected leftAt to be reset to null on rejoin");
+	assert.strictEqual(
+		await JoinHistoryModel.countDocuments(historyQuery),
+		1,
+		"expected a single join history doc per member",
+	);
 
 	console.log("OK: all local-harness checks passed");
 }

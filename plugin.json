@@ -1,7 +1,7 @@
 {
 	"name": "adb-plugin-welcome",
 	"displayName": "Welcome",
-	"version": "2.0.0",
+	"version": "2.1.0",
 	"description": "Customizable welcome & goodbye messages with canvas image cards, role-based routing, multi-channel onboarding, social links, buttons, and stats.",
 	"author": "DeadIndian",
 	"main": "index.js",
@@ -29,6 +29,24 @@
 	},
 	"declaredDependencies": [],
 	"discordPermissions": ["SendMessages", "EmbedLinks", "AttachFiles", "ManageRoles"],
+	"webUi": {
+		"memberPages": [
+			{
+				"path": "/me/join-history",
+				"label": "My Join History",
+				"icon": "DoorOpen",
+				"source": { "model": "joinHistory", "scope": "member", "limit": 1 },
+				"view": {
+					"type": "stat",
+					"stats": [
+						{ "field": "joinedAt", "label": "Joined" },
+						{ "field": "leftAt", "label": "Last Left" },
+						{ "field": "welcomed", "label": "Welcomed" }
+					]
+				}
+			}
+		]
+	},
 	"engines": {
 		"core": ">=2.0.0",
 		"plugins": { "administration": ">=2.0.0" }

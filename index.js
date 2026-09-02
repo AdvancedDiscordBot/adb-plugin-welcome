@@ -2,6 +2,7 @@ const welcomeCommand = require("./commands/welcome");
 const welcomeChannelCommand = require("./commands/welcome-channel");
 const { normalizeConfig, isMilestone } = require("./lib/config");
 const { buildEventPayload, buildButtonRows, ROLE_BUTTON_PREFIX } = require("./lib/message-builder");
+const joinHistorySchema = require("./models/joinHistory");
 
 async function loadConfig(ctx, guildId) {
 	const config = await ctx.db.getPluginConfig(guildId, "adb-plugin-welcome");
@@ -28,12 +29,23 @@ function recordStat(data, kind) {
  * and namespaced to this plugin.
  */
 async function load(ctx) {
+	const JoinHistoryModel = ctx.defineModel("joinHistory", joinHistorySchema);
+
 	ctx.registerCommand({ data: welcomeCommand.data, execute: (interaction) => welcomeCommand.execute(interaction, ctx) });
 	ctx.registerCommand({ data: welcomeChannelCommand.data, execute: (interaction) => welcomeChannelCommand.execute(interaction, ctx) });
 
 	// --- Listen to guildMemberAdd event -------------------------------------
 	ctx.registerEvent("guildMemberAdd", async (member, client) => {
 		try {
+			// Record the join regardless of whether welcomes are enabled.
+			const joinQuery = { guildId: member.guild.id, userId: member.id };
+			await JoinHistoryModel.findOneAndUpdate(
+				joinQuery,
+				{ $set: { joinedAt: new Date(), leftAt: null } },
+				{ upsert: true }
+			);
+			let welcomedSent = false;
+
 			const { data } = await loadConfig(ctx, member.guild.id);
 			const hasAnyDestination =
 				data.welcomeChannelId ||
@@ -62,7 +74,13 @@ async function load(ctx) {
 
 				const sendPayload = { content: payload.text, embeds: [payload.embed], components: payload.components };
 				if (payload.attachment) sendPayload.files = [payload.attachment];
-				await channel.send(sendPayload).catch((err) => ctx.logger.error(`Failed to send welcome message to channel ${channelId}`, err));
+				const sent = await channel
+					.send(sendPayload)
+					.catch((err) => {
+						ctx.logger.error(`Failed to send welcome message to channel ${channelId}`, err);
+						return null;
+					});
+				if (sent) welcomedSent = true;
 			}
 
 			// 2. Rules channel auto-link
@@ -97,11 +115,20 @@ async function load(ctx) {
 				}
 				const dmSendPayload = { content: dmPayload.text, embeds: [dmPayload.embed] };
 				if (dmPayload.attachment) dmSendPayload.files = [dmPayload.attachment];
-				await member.send(dmSendPayload).catch((err) => ctx.logger.error(`Failed to send welcome DM to user ${member.user.tag}`, err));
+				await member
+					.send(dmSendPayload)
+					.then(() => {
+						welcomedSent = true;
+					})
+					.catch((err) => ctx.logger.error(`Failed to send welcome DM to user ${member.user.tag}`, err));
 			}
 
 			recordStat(data, "welcome");
 			await ctx.db.updatePluginConfig(member.guild.id, "adb-plugin-welcome", data);
+
+			if (welcomedSent) {
+				await JoinHistoryModel.updateOne(joinQuery, { $set: { welcomed: true } });
+			}
 		} catch (err) {
 			ctx.logger.error("Error in guildMemberAdd event handler:", err);
 		}
@@ -110,6 +137,20 @@ async function load(ctx) {
 	// --- Listen to guildMemberRemove event ----------------------------------
 	ctx.registerEvent("guildMemberRemove", async (member, client) => {
 		try {
+			// Record the leave regardless of whether goodbye messages are enabled.
+			const joinQuery = { guildId: member.guild.id, userId: member.id };
+			const leftAt = new Date();
+			const existing = await JoinHistoryModel.findOne(joinQuery);
+			if (existing) {
+				await JoinHistoryModel.updateOne(joinQuery, { $set: { leftAt } });
+			} else {
+				// Member joined before this version tracked history.
+				await JoinHistoryModel.create({
+					...joinQuery,
+					joinedAt: member.joinedTimestamp ? new Date(member.joinedTimestamp) : leftAt,
+					leftAt,
+				});
+			}
 			const { data } = await loadConfig(ctx, member.guild.id);
 			if (!data.goodbyeChannelId && !data.channels.goodbye) return;
 
