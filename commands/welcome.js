@@ -3,6 +3,10 @@ const { normalizeConfig, formatText } = require("../lib/config");
 const { listPresets, getPreset } = require("../lib/presets");
 const { SOCIAL_ORDER, SOCIAL_META } = require("../lib/social");
 const { buildEventPayload } = require("../lib/message-builder");
+const { resolveMember, canManageGuild } = require("../lib/member");
+
+const MANAGE_GUILD_DENIED = "❌ You need the **Manage Server** permission to use this command.";
+const MEMBER_UNRESOLVED = "❌ I couldn't resolve your server membership. Please try again in the server.";
 
 const MAX_BACKGROUNDS = 10;
 const ALLOWED_BACKGROUND_TYPES = ["image/png", "image/jpeg", "image/gif"];
@@ -153,8 +157,12 @@ module.exports = {
 	},
 
 	async execute(interaction, ctx) {
-		if (!interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
-			return interaction.reply({ content: "❌ You need the **Manage Server** permission to use this command.", ephemeral: true });
+		const member = await resolveMember(interaction);
+		if (!member) {
+			return interaction.reply({ content: MEMBER_UNRESOLVED, ephemeral: true });
+		}
+		if (!canManageGuild(member, PermissionFlagsBits.ManageGuild)) {
+			return interaction.reply({ content: MANAGE_GUILD_DENIED, ephemeral: true });
 		}
 
 		const group = interaction.options.getSubcommandGroup(false);
@@ -170,7 +178,7 @@ module.exports = {
 		if (subcommand.startsWith("embed-")) return handleEmbed(interaction, ctx, guildId, data, subcommand);
 		if (subcommand === "stats") return handleStats(interaction, data);
 
-		return handleLegacy(interaction, ctx, guildId, data, subcommand);
+		return handleLegacy(interaction, member, ctx, guildId, data, subcommand);
 	},
 
 	formatWelcomeText: formatText,
@@ -178,7 +186,7 @@ module.exports = {
 
 // --- Legacy top-level subcommands (backward compatible) --------------------
 
-async function handleLegacy(interaction, ctx, guildId, data, subcommand) {
+async function handleLegacy(interaction, member, ctx, guildId, data, subcommand) {
 	if (subcommand === "channel") {
 		const channel = interaction.options.getChannel("channel");
 		if (channel) {
@@ -239,8 +247,8 @@ async function handleLegacy(interaction, ctx, guildId, data, subcommand) {
 
 	if (subcommand === "preview") {
 		await interaction.deferReply();
-		const welcomePayload = await buildEventPayload(data, interaction.member, true);
-		const goodbyePayload = await buildEventPayload(data, interaction.member, false);
+		const welcomePayload = await buildEventPayload(data, member, true);
+		const goodbyePayload = await buildEventPayload(data, member, false);
 
 		const files = [welcomePayload.attachment, goodbyePayload.attachment].filter(Boolean);
 		return interaction.editReply({
@@ -253,8 +261,11 @@ async function handleLegacy(interaction, ctx, guildId, data, subcommand) {
 
 	if (subcommand === "test") {
 		await interaction.deferReply();
-		const welcomePayload = await buildEventPayload(data, interaction.member, true);
-		const goodbyePayload = await buildEventPayload(data, interaction.member, false);
+		if (!interaction.guild) {
+			return interaction.editReply({ content: "❌ This command can only be run inside a server." });
+		}
+		const welcomePayload = await buildEventPayload(data, member, true);
+		const goodbyePayload = await buildEventPayload(data, member, false);
 
 		let welcomeSent = false;
 		let welcomeDmSent = false;
@@ -270,7 +281,7 @@ async function handleLegacy(interaction, ctx, guildId, data, subcommand) {
 			}
 		}
 
-		if (data.dmEnabled) {
+		if (data.dmEnabled && typeof interaction.user?.send === "function") {
 			await interaction.user
 				.send({ content: welcomePayload.text, embeds: [welcomePayload.embed], files: welcomePayload.attachment ? [welcomePayload.attachment] : [] })
 				.then(() => {

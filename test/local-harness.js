@@ -22,7 +22,9 @@ function fakeInteraction(options = {}) {
 	return {
 		guildId: options._guildId ?? "test-guild-id",
 		user: testUser,
-		member: {
+		// `_member` overrides the whole member object — pass null to emulate the
+		// isolated worker, which can hand the handler no member at all.
+		member: "_member" in options ? options._member : {
 			id: "test-member-id",
 			user: {
 				id: "test-member-id",
@@ -80,6 +82,19 @@ function fakeInteraction(options = {}) {
 			return payload;
 		},
 		replies,
+	};
+}
+
+// A member exactly as the isolated worker hands it to execute(): the core
+// serializes `{ id, user, guildId, nickname, roles: [ids] }` — no permissions
+// object, and `roles` is a plain array rather than a discord.js RoleManager.
+function workerMember(roleIds = []) {
+	return {
+		id: "test-member-id",
+		user: { id: "test-member-id", tag: "testuser#0001", username: "testusername" },
+		guildId: "test-guild-id",
+		nickname: null,
+		roles: roleIds,
 	};
 }
 
@@ -409,6 +424,80 @@ async function main() {
 		await JoinHistoryModel.countDocuments(historyQuery),
 		1,
 		"expected a single join history doc per member",
+	);
+
+	// 19. Isolated-worker interactions: the core serializes `member` without a
+	// permissions object and with `roles` as a plain array (or omits the member
+	// entirely). None of these may throw "Cannot read properties of undefined".
+	const rejected = (r) => r.payload && getContent(r.payload).includes("Manage Server");
+
+	// (a) worker-shaped member — roles array, no permissions object
+	const intWorker = fakeInteraction({ _subcommand: "message", text: "hi", _member: workerMember(["role-1"]) });
+	await welcomeCommand.execute(intWorker);
+	assert.ok(intWorker.replies.length > 0, "expected a reply for a worker-shaped member");
+	assert.ok(!rejected(intWorker.replies[0]), "worker-shaped member should be treated as authorized (permissions unavailable)");
+
+	// (b) worker-shaped member with no roles at all
+	const intWorkerNoRoles = fakeInteraction({ _subcommand: "message", text: "hi", _member: workerMember() });
+	await welcomeCommand.execute(intWorkerNoRoles);
+	assert.ok(intWorkerNoRoles.replies.length > 0, "expected a reply for a worker-shaped member with no roles");
+
+	// (c) no member object at all — must degrade to a clear ephemeral error, not throw
+	const intNoMember = fakeInteraction({ _subcommand: "message", text: "hi", _member: null });
+	await welcomeCommand.execute(intNoMember);
+	assert.ok(
+		intNoMember.replies.some((r) => getContent(r.payload).includes("couldn't resolve")),
+		"expected a clear error reply when the member is missing",
+	);
+
+	const welcomeChannelCmd = registeredCommands.get("welcome-channel");
+	const intWcNoMember = fakeInteraction({ _subcommand: "list", _member: null });
+	await welcomeChannelCmd.execute(intWcNoMember, ctx);
+	assert.ok(
+		intWcNoMember.replies.some((r) => getContent(r.payload).includes("couldn't resolve")),
+		"expected /welcome-channel to reject a missing member too",
+	);
+
+	// (d) role-button click with a worker-shaped member (roles array, no .cache)
+	let workerAddedRole = null;
+	const workerButtonInteraction = {
+		isButton: () => true,
+		customId: `${ROLE_BUTTON_PREFIX}role-1`,
+		guild: { roles: { fetch: async (id) => (id === "role-1" ? mockRole : null) } },
+		member: {
+			roles: {
+				add: async (role) => {
+					workerAddedRole = role;
+				},
+			},
+		},
+		reply: async (payload) => {
+			workerButtonInteraction._replies.push(payload);
+			return payload;
+		},
+		_replies: [],
+	};
+	await emitEvent("interactionCreate", workerButtonInteraction);
+	assert.strictEqual(workerAddedRole, mockRole, "expected role button to work without a roles cache");
+	assert.ok(workerButtonInteraction._replies.some((p) => getContent(p).includes("New Member")), "expected role-assignment confirmation");
+
+	// (e) role button when the member cannot be resolved at all
+	const noMemberButtonInteraction = {
+		isButton: () => true,
+		customId: `${ROLE_BUTTON_PREFIX}role-1`,
+		guild: { roles: { fetch: async (id) => (id === "role-1" ? mockRole : null) } },
+		member: null,
+		user: { id: "test-user-id" },
+		reply: async (payload) => {
+			noMemberButtonInteraction._replies.push(payload);
+			return payload;
+		},
+		_replies: [],
+	};
+	await emitEvent("interactionCreate", noMemberButtonInteraction);
+	assert.ok(
+		noMemberButtonInteraction._replies.some((p) => getContent(p).includes("❌")),
+		"expected a clear error reply when the member is missing on a role button",
 	);
 
 	console.log("OK: all local-harness checks passed");

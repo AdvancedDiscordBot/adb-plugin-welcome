@@ -1,6 +1,7 @@
 const welcomeCommand = require("./commands/welcome");
 const welcomeChannelCommand = require("./commands/welcome-channel");
-const { normalizeConfig, isMilestone } = require("./lib/config");
+const { normalizeConfig, isMilestone, memberRoleIds } = require("./lib/config");
+const { resolveMember } = require("./lib/member");
 const { buildEventPayload, buildButtonRows, ROLE_BUTTON_PREFIX } = require("./lib/message-builder");
 const joinHistorySchema = require("./models/joinHistory");
 
@@ -179,10 +180,14 @@ async function load(ctx) {
 			if (!role) {
 				return interaction.reply({ content: "❌ That role no longer exists.", ephemeral: true });
 			}
-			if (interaction.member.roles.cache.has(roleId)) {
+			const member = await resolveMember(interaction);
+			if (!member) {
+				return interaction.reply({ content: "❌ I couldn't resolve your server membership. Please try again.", ephemeral: true });
+			}
+			if (memberRoleIds(member).includes(roleId)) {
 				return interaction.reply({ content: `You already have **${role.name}**.`, ephemeral: true });
 			}
-			await interaction.member.roles.add(role);
+			await member.roles.add(role);
 			return interaction.reply({ content: `✅ You've been given the **${role.name}** role!`, ephemeral: true });
 		} catch (err) {
 			ctx.logger.error("Failed to assign role from welcome button", err);

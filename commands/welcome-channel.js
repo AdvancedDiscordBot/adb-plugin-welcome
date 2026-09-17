@@ -1,5 +1,6 @@
 const { PermissionFlagsBits } = require("discord.js");
 const { normalizeConfig } = require("../lib/config");
+const { resolveMember, canManageGuild } = require("../lib/member");
 
 const CHANNEL_TYPES = ["welcome", "goodbye", "rules", "verify"];
 
@@ -31,7 +32,11 @@ module.exports = {
 	},
 
 	async execute(interaction, ctx) {
-		if (!interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+		const member = await resolveMember(interaction);
+		if (!member) {
+			return interaction.reply({ content: "❌ I couldn't resolve your server membership. Please try again in the server.", ephemeral: true });
+		}
+		if (!canManageGuild(member, PermissionFlagsBits.ManageGuild)) {
 			return interaction.reply({ content: "❌ You need the **Manage Server** permission to use this command.", ephemeral: true });
 		}
 
