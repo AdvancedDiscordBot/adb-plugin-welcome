@@ -276,8 +276,8 @@ async function handleLegacy(interaction, member, ctx, guildId, data, subcommand)
 			if (channel?.isTextBased()) {
 				await channel
 					.send({ content: welcomePayload.text, embeds: [welcomePayload.embed], files: welcomePayload.attachment ? [welcomePayload.attachment] : [], components: welcomePayload.components })
+					.then(() => { welcomeSent = true; })
 					.catch(() => {});
-				welcomeSent = true;
 			}
 		}
 
@@ -293,8 +293,9 @@ async function handleLegacy(interaction, member, ctx, guildId, data, subcommand)
 		for (const channelId of goodbyePayload.channelIds) {
 			const channel = await interaction.guild.channels.fetch(channelId).catch(() => null);
 			if (channel?.isTextBased()) {
-				await channel.send({ content: goodbyePayload.text, embeds: [goodbyePayload.embed], files: goodbyePayload.attachment ? [goodbyePayload.attachment] : [] }).catch(() => {});
-				goodbyeSent = true;
+				await channel.send({ content: goodbyePayload.text, embeds: [goodbyePayload.embed], files: goodbyePayload.attachment ? [goodbyePayload.attachment] : [] })
+					.then(() => { goodbyeSent = true; })
+					.catch(() => {});
 			}
 		}
 
