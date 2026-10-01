@@ -43,7 +43,7 @@ async function load(ctx) {
 			const joinQuery = { guildId: member.guild.id, userId: member.id };
 			await JoinHistoryModel.findOneAndUpdate(
 				joinQuery,
-				{ $set: { joinedAt: new Date(), leftAt: null } },
+				{ $set: { joinedAt: new Date(), leftAt: null, welcomed: false } },
 				{ upsert: true }
 			);
 			let welcomedSent = false;
