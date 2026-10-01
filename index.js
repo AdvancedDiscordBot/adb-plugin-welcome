@@ -1,3 +1,4 @@
+const { PermissionFlagsBits } = require("discord.js");
 const welcomeCommand = require("./commands/welcome");
 const welcomeChannelCommand = require("./commands/welcome-channel");
 const { normalizeConfig, isMilestone, memberRoleIds } = require("./lib/config");
@@ -175,22 +176,38 @@ async function load(ctx) {
 	ctx.registerEvent("interactionCreate", async (interaction) => {
 		if (!interaction.isButton?.() || !interaction.customId?.startsWith(ROLE_BUTTON_PREFIX)) return;
 		try {
+			if (!interaction.guild || !interaction.guildId) {
+				return interaction.reply({ content: "Welcome role buttons can only be used in a server.", ephemeral: true });
+			}
+			await interaction.deferReply({ ephemeral: true });
 			const roleId = interaction.customId.slice(ROLE_BUTTON_PREFIX.length);
+			const { data } = await loadConfig(ctx, interaction.guildId);
+			if (!data.buttons.some((button) => button.type === "role" && button.roleId === roleId)) {
+				return interaction.editReply({ content: "This welcome role button is no longer configured." });
+			}
 			const role = await interaction.guild.roles.fetch(roleId).catch(() => null);
 			if (!role) {
-				return interaction.reply({ content: "❌ That role no longer exists.", ephemeral: true });
+				return interaction.editReply({ content: "❌ That role no longer exists." });
+			}
+			const botMember = await interaction.guild.members.fetchMe();
+			if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles) || role.managed || role.id === interaction.guild.id ||
+				!(role.position < botMember.roles.highest.position)) {
+				return interaction.editReply({ content: "I cannot assign that role. Check Manage Roles permission, role hierarchy, and whether the role is managed or @everyone." });
 			}
 			const member = await resolveMember(interaction);
 			if (!member) {
-				return interaction.reply({ content: "❌ I couldn't resolve your server membership. Please try again.", ephemeral: true });
+				return interaction.editReply({ content: "❌ I couldn't resolve your server membership. Please try again." });
 			}
 			if (memberRoleIds(member).includes(roleId)) {
-				return interaction.reply({ content: `You already have **${role.name}**.`, ephemeral: true });
+				return interaction.editReply({ content: `You already have **${role.name}**.` });
 			}
 			await member.roles.add(role);
-			return interaction.reply({ content: `✅ You've been given the **${role.name}** role!`, ephemeral: true });
+			return interaction.editReply({ content: `✅ You've been given the **${role.name}** role!` });
 		} catch (err) {
 			ctx.logger.error("Failed to assign role from welcome button", err);
+			if (interaction.deferred || interaction.replied) {
+				return interaction.editReply({ content: "❌ I couldn't assign that role. Check my permissions and role position." }).catch(() => {});
+			}
 			return interaction
 				.reply({ content: "❌ I couldn't assign that role. Check my permissions and role position.", ephemeral: true })
 				.catch(() => {});
