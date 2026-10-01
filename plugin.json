@@ -1,7 +1,7 @@
 {
 	"name": "adb-plugin-welcome",
 	"displayName": "Welcome",
-	"version": "2.1.0",
+	"version": "2.1.1",
 	"description": "Customizable welcome & goodbye messages with canvas image cards, role-based routing, multi-channel onboarding, social links, buttons, and stats.",
 	"author": "DeadIndian",
 	"main": "index.js",
