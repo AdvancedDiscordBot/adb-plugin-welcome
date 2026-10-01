@@ -29,6 +29,27 @@ Within your ADB installation directory, install the plugin:
 npm install adb-plugin-welcome
 ```
 
+## Runtime trust
+
+This plugin explicitly declares `system:raw-client` in both `capabilities` and
+`permissions`, with a persistent process, following ADB's moderation plugin
+contract. Full Discord.js guild/member objects, channel and DM sends, role
+buttons, and native canvas/image loading are not supported by the serialized
+worker RPC surface. Do not disable global plugin isolation.
+
+This requires owner-approved elevated host trust: the plugin runs in the bot's
+main process and can access the raw client, host database and environment. Its
+narrower permission lists are not a sandbox or a network boundary (card rendering
+loads remote avatar/background images). The manifest also discloses native
+addons for canvas. ADB's platform per-guild plugin enable toggle does not apply
+to raw-client plugins. Clearing destinations stops future sends; remove role
+buttons from configuration to invalidate existing copies.
+
+Configuration commands require verified Manage Server permission. Role buttons
+only grant roles still present in the guild's current `buttons` configuration;
+removing a button invalidates old copies. Managed roles, `@everyone`, and roles
+at or above the bot's highest role are never granted.
+
 ## Slash Commands
 
 Configured commands are restricted to server administrators/managers:
